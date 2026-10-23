@@ -29,6 +29,7 @@
 #include "lvgl.h"
 #include "mbedtls/base64.h"
 #include "src/draw/lv_image_decoder_private.h"   /* custom decoder */
+#include "charm_clock.h"
 #include "charm_notify.h"
 #include "src/misc/lv_area_private.h"            /* lv_area_intersect, for the ring */
 
@@ -117,6 +118,7 @@ bool muse_ui_face_active(void)
 }
 static lv_obj_t *s_settings;
 static lv_obj_t *s_dots[3];   /* charm: inbox, face, settings */
+static lv_obj_t *s_clock_lbl;   /* charm: 24 h time in the status row */
 static lv_obj_t *s_wifi_icon;
 static lv_obj_t *s_ble_icon;
 static lv_obj_t *s_cover;
@@ -949,6 +951,7 @@ static void build_screen(void)
     lv_obj_set_flex_align(status, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(status, s_small ? 4 : 8, 0);
     lv_obj_align(status, LV_ALIGN_TOP_MID, 0, muse_board->rim_controls ? 40 : s_small ? 1 : 20 + s_dy);
+    s_clock_lbl = make_label(status, s_small ? &lv_font_unscii_8 : &lv_font_unscii_16, 0xbcd0f0);
     s_wifi_icon = make_label(status, &lv_font_montserrat_14, COLOR_DIM);
     s_ble_icon = make_label(status, &lv_font_montserrat_14, COLOR_DIM);
     s_power_lbl = make_label(status, &lv_font_unscii_8, COLOR_DIM);
@@ -1329,6 +1332,14 @@ static void update_chrome(float now)
             s_shown_page = shown;
         }
         muse_settings_ui_tick(lv_obj_get_scroll_x(s_tv) > lv_obj_get_x(s_face));
+    }
+
+    /* charm: the time, once SNTP has it. */
+    charm_clock_tick();
+    char hhmm[8] = "";
+    charm_clock_hhmm(hhmm, sizeof(hhmm));
+    if (strcmp(hhmm, lv_label_get_text(s_clock_lbl)) != 0) {
+        lv_label_set_text(s_clock_lbl, hhmm);
     }
 
     /* Joining, the icon blinks: the compact layout has no state label. */

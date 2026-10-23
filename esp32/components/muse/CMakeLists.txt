@@ -31,6 +31,7 @@ if(CONFIG_MUSE_ENABLED)
         "muse_ui.c"
         "charm_notify.c"
         "charm_token.c"
+        "charm_clock.c"
         "muse_audio.c"
         "muse_pmu.c"
         "muse_input.c"
