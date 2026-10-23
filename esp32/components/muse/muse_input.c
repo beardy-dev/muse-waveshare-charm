@@ -463,8 +463,13 @@ static bool update_wifi_nap(TickType_t now, bool paused)
         s_nap_now = false;
         muse_state_set_as_if_battery(false);
     }
-    bool nap = paused && !muse_voice_notes_waiting()
-               && (s_nap_now || (s_cpu_low && now - low_since >= pdMS_TO_TICKS(WIFI_NAP_MS)));
+    /*
+     * charm: never nap on a timer, so Muse can reach the charm on battery
+     * (notify.show). Wi-Fi stays in its rest mode instead: modem sleep over
+     * several beacons, up to a second's latency. Only ">nap" still naps.
+     */
+    bool nap = paused && !muse_voice_notes_waiting() && s_nap_now;
+    (void)low_since;
     if (nap != napping) {
         napping = nap;
         ESP_LOGI(TAG, "Wi-Fi %s", nap ? "napping" : "waking");
