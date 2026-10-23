@@ -12,8 +12,8 @@
 
 #define N CHARM_TOKEN_N
 #define G CHARM_TOKEN_GRID
-#define DEPTH 3                 /* thickness, in sprite pixels */
-#define CELL 1.55f              /* grid cells per sprite pixel */
+#define DEPTH 2                 /* thickness, in sprite pixels */
+#define CELL 1.75f              /* grid cells per sprite pixel */
 #define SUB 4                   /* splats per pixel edge: dense enough to leave no holes when turned */
 #define BEVEL 1.5f              /* how strongly the front face rounds off at its rim */
 
@@ -101,12 +101,18 @@ static inline v3_t rot(const view_t *v, v3_t p)
               v->m[2][0] * p.x + v->m[2][1] * p.y + v->m[2][2] * p.z);
 }
 
-/* Lambert in four flat bands plus a white glint: faceted, like the avatar. */
-static uint16_t shade(const view_t *v, uint16_t c, v3_t n)
+/*
+ * Flat bands plus a white glint, like the avatar. The front face keeps
+ * GUPPI's colours (only its rim shades) so details stay readable; the walls
+ * go darker so the thickness reads.
+ */
+static uint16_t shade(const view_t *v, uint16_t c, v3_t n, bool wall)
 {
     float lam = dot3(n, v->light);
-    float i = 0.5f + 0.85f * (lam > 0 ? lam : 0);   /* facing us: about true colour */
+    lam = lam > 0 ? lam : 0;
+    float i = wall ? 0.35f + 0.45f * lam : 0.8f + 0.3f * lam;
     i = floorf(i * 4.0f + 0.5f) / 4.0f;
+    i = i > 1.0f ? 1.0f : i;
     int r = ((c >> 11) & 31) << 3, g = ((c >> 5) & 63) << 2, b = (c & 31) << 3;
     r = (int)(r * i);
     g = (int)(g * i);
@@ -142,9 +148,9 @@ static inline void splat(const view_t *v, v3_t p, uint16_t color)
 
 void charm_token_render(float t, uint16_t *out)
 {
-    /* A slow rock and a slight nod; never far enough round to show the back. */
-    float yaw = 0.62f * sinf(t * 1.1f);
-    float pitch = 0.22f + 0.10f * sinf(t * 0.7f);
+    /* A gentle rock and nod: enough to read as solid, little enough that the face stays legible. */
+    float yaw = 0.32f * sinf(t * 1.1f);
+    float pitch = 0.14f + 0.06f * sinf(t * 0.7f);
     float cy = cosf(yaw), sy = sinf(yaw), cp = cosf(pitch), sp = sinf(pitch);
     view_t v = {
         .m = {
@@ -170,7 +176,7 @@ void charm_token_render(float t, uint16_t *out)
             float px = x - h, py = h - y - 1;   /* pixel's lower-left corner, y up */
 
             /* Front face, domed by the bevel normal. */
-            uint16_t cf = shade(&v, c, rot(&v, norm3(v3(s_nx[i], s_ny[i], 1.0f))));
+            uint16_t cf = shade(&v, c, rot(&v, norm3(v3(s_nx[i], s_ny[i], 1.0f))), false);
             for (int a = 0; a < SUB; a++) {
                 for (int b = 0; b < SUB; b++) {
                     splat(&v, v3(px + (a + 0.5f) / SUB, py + (b + 0.5f) / SUB, front), cf);
@@ -184,7 +190,7 @@ void charm_token_render(float t, uint16_t *out)
                     continue;
                 }
                 v3_t n = v3((float)DX[k], (float)-DY[k], 0);
-                uint16_t cs = shade(&v, c, rot(&v, n));
+                uint16_t cs = shade(&v, c, rot(&v, n), true);
                 for (int a = 0; a < SUB; a++) {
                     float s = (a + 0.5f) / SUB;
                     for (int d = 0; d < DEPTH * SUB; d++) {
