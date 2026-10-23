@@ -37,6 +37,7 @@
 #include "muse_settings.h"
 #include "muse_state.h"
 #include "muse_wifi.h"
+#include "charm_tts.h"
 
 static const char *TAG = "muse_voice";
 
@@ -70,6 +71,8 @@ static volatile float s_monitor_db = -100.0f;
 static volatile bool s_chirp;
 static volatile bool s_loopback;
 static volatile bool s_mp3test;
+static volatile bool s_say;
+static char s_say_text[256];   /* charm: muse_voice_request_say() */
 
 /*
  * Pre-roll: while idle the mic keeps running into this ring, so a recording
@@ -589,6 +592,14 @@ static void voice_task(void *arg)
                 muse_audio_chirp(1);
                 pre_reset();
             }
+            if (s_say) {
+                s_say = false;
+                muse_state_set_mode(MUSE_MODE_SPEAKING);
+                muse_state_set_caption("%s", s_say_text);
+                bool said = charm_tts_say(s_say_text);
+                go_idle(said ? "" : "TTS DIDN'T START");
+                pre_reset();
+            }
             if (s_mp3test) {
                 s_mp3test = false;
                 int16_t *pcm = NULL;
@@ -691,6 +702,13 @@ void muse_voice_request_chirp(void)
 void muse_voice_request_loopback(void)
 {
     s_loopback = true;
+    muse_state_nudge();
+}
+
+void muse_voice_request_say(const char *text)
+{
+    strlcpy(s_say_text, text, sizeof(s_say_text));
+    s_say = true;
     muse_state_nudge();
 }
 

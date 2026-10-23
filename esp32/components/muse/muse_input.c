@@ -44,6 +44,7 @@
 #include "muse_state.h"
 #include "muse_ui.h"
 #include "muse_voice.h"
+#include "charm_tts.h"
 #include "muse_wifi.h"
 #if CONFIG_MUSE_VIDEO
 #include "muse_video.h"
@@ -781,6 +782,14 @@ static bool console_command(char *line, bool whole)
         return true;
     }
 #endif
+    if (!strncmp(line, "tts.pitch=", 10)) {   /* charm: on-device TTS spike */
+        charm_tts_set_pitch(atoi(line + 10));
+        return true;
+    }
+    if (!strncmp(line, "say=", 4)) {   /* charm: on-device TTS spike */
+        muse_voice_request_say(line + 4);
+        return true;
+    }
     if (!strncmp(line, "face=", 5)) {
         set_face(line + 5);
         return true;
