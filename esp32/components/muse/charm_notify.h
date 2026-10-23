@@ -40,3 +40,10 @@ bool charm_notify_clear(const char *id);
 
 /* UI task, display lock held, once per frame. */
 void charm_notify_tick(float now);
+
+/* UI task: builds the inbox page (past notifications) into a tile. */
+struct _lv_obj_t;
+void charm_notify_build_inbox(struct _lv_obj_t *tile);
+
+/* UI task: the inbox page came on or went off screen. */
+void charm_notify_inbox_visible(bool visible);

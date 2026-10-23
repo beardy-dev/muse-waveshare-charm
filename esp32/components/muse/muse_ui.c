@@ -101,10 +101,13 @@ static lv_obj_t *s_tv;
 static volatile bool s_face_active = true;
 static lv_obj_t *s_face;
 
+static lv_obj_t *s_inbox;   /* charm: notifications page, left of the face */
+
 static void tile_changed_cb(lv_event_t *e)
 {
     lv_obj_t *tv = lv_event_get_target(e);
     s_face_active = (lv_tileview_get_tile_active(tv) == s_face);
+    charm_notify_inbox_visible(lv_tileview_get_tile_active(tv) == s_inbox);
 }
 
 /* From any task: the face tile is the currently visible tile. */
@@ -113,7 +116,7 @@ bool muse_ui_face_active(void)
     return s_face_active;
 }
 static lv_obj_t *s_settings;
-static lv_obj_t *s_dots[2];
+static lv_obj_t *s_dots[3];   /* charm: inbox, face, settings */
 static lv_obj_t *s_wifi_icon;
 static lv_obj_t *s_ble_icon;
 static lv_obj_t *s_cover;
@@ -859,12 +862,14 @@ static void build_screen(void)
 
     lv_obj_t *face = scr;
     if (muse_board->touch) {
-        /* Swipe left from Muse for settings. */
+        /* Swipe left from Muse for settings; charm: swipe right for notifications. */
         s_tv = lv_tileview_create(scr);
         lv_obj_set_style_bg_color(s_tv, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_tv, LV_OPA_COVER, 0);
         lv_obj_set_scrollbar_mode(s_tv, LV_SCROLLBAR_MODE_OFF);
-        s_face = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);
+        s_inbox = lv_tileview_add_tile(s_tv, 0, 0, LV_DIR_RIGHT);
+        charm_notify_build_inbox(s_inbox);
+        s_face = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_LEFT | LV_DIR_RIGHT);
         /* It never scrolls, but LVGL would size its scrollbars from all its
          * children every time it draws any part of it. */
         lv_obj_set_scrollbar_mode(s_face, LV_SCROLLBAR_MODE_OFF);
@@ -872,8 +877,9 @@ static void build_screen(void)
          * shows as a different-coloured square around the character. */
         lv_obj_set_style_bg_color(s_face, lv_color_black(), 0);
         lv_obj_set_style_bg_opa(s_face, LV_OPA_COVER, 0);
-        s_settings = lv_tileview_add_tile(s_tv, 1, 0, LV_DIR_LEFT);
+        s_settings = lv_tileview_add_tile(s_tv, 2, 0, LV_DIR_LEFT);
         lv_obj_add_event_cb(s_tv, tile_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_tileview_set_tile(s_tv, s_face, LV_ANIM_OFF);   /* start on Muse, not the inbox */
         face = s_face;
     }
 
@@ -1143,7 +1149,7 @@ static void build_overlays(void)
     lv_obj_t *scr = lv_screen_active();
 
     /* Page dots. */
-    for (int i = 0; i < 2 && s_tv; i++) {
+    for (int i = 0; i < 3 && s_tv; i++) {
         lv_obj_t *d = lv_obj_create(scr);
         lv_obj_remove_style_all(d);
         lv_obj_set_size(d, 8, 8);
@@ -1151,7 +1157,7 @@ static void build_overlays(void)
         lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(d, lv_color_hex(COLOR_DOT_OFF), 0);
         lv_obj_remove_flag(d, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_align(d, LV_ALIGN_BOTTOM_MID, i ? 8 : -8, -14);
+        lv_obj_align(d, LV_ALIGN_BOTTOM_MID, (i - 1) * 16, -14);
         s_dots[i] = d;
     }
 
@@ -1306,21 +1312,23 @@ static void update_chrome(float now)
     s_next_settings_tick = now + SETTINGS_TICK_S;
 
     if (s_tv) {
-        int page = lv_tileview_get_tile_active(s_tv) == s_settings;
+        lv_obj_t *active = lv_tileview_get_tile_active(s_tv);
+        int page = active == s_settings ? 2 : active == s_face ? 1 : 0;
+        bool settings = page == 2;
         bool subpage = muse_settings_ui_in_subpage();
-        bool swipe = !page || !subpage;
+        bool swipe = !settings || !subpage;
         if (swipe != lv_obj_has_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE)) {
             lv_obj_set_flag(s_tv, LV_OBJ_FLAG_SCROLLABLE, swipe);
         }
         int shown = page * 2 + subpage;
         if (shown != s_shown_page) {
-            for (int i = 0; i < 2; i++) {
+            for (int i = 0; i < 3; i++) {
                 lv_obj_set_style_bg_color(s_dots[i], lv_color_hex(i == page ? COLOR_ACCENT : COLOR_DOT_OFF), 0);
-                lv_obj_set_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN, page && subpage);
+                lv_obj_set_flag(s_dots[i], LV_OBJ_FLAG_HIDDEN, settings && subpage);
             }
             s_shown_page = shown;
         }
-        muse_settings_ui_tick(lv_obj_get_scroll_x(s_tv) > 0);
+        muse_settings_ui_tick(lv_obj_get_scroll_x(s_tv) > lv_obj_get_x(s_face));
     }
 
     /* Joining, the icon blinks: the compact layout has no state label. */
@@ -1657,7 +1665,7 @@ static void frame_tick(lv_timer_t *timer)
     if (s_image_dsc.data) {
         return;   /* the image covers the face */
     }
-    if (s_tv && lv_obj_get_scroll_x(s_tv) != 0) {
+    if (s_tv && lv_obj_get_scroll_x(s_tv) != lv_obj_get_x(s_face)) {
         /* Off screen, or sliding to or from settings: hold still so the
          * slide gets the whole frame time. */
         return;
