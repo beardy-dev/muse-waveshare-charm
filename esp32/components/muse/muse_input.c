@@ -468,7 +468,7 @@ static bool update_wifi_nap(TickType_t now, bool paused)
      * (notify.show). Wi-Fi stays in its rest mode instead: modem sleep over
      * several beacons, up to a second's latency. Only ">nap" still naps.
      */
-    bool nap = paused && !muse_voice_notes_waiting() && s_nap_now;
+    bool nap = paused && s_nap_now;
     (void)low_since;
     if (nap != napping) {
         napping = nap;

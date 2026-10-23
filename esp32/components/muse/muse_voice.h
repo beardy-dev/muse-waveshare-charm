@@ -46,7 +46,3 @@ void muse_voice_request_mp3test(void);
 
 /* Asleep with nothing to play: codecs off, Wi-Fi dozing. */
 bool muse_voice_resting(void);
-
-/* Voice notes recorded out of Hatch's reach wait to go, the oldest from the
- * last half hour: worth keeping Wi-Fi up for. */
-bool muse_voice_notes_waiting(void);

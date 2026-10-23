@@ -52,20 +52,17 @@ static const char *TAG = "muse_voice";
 #define SETTLE_CHUNKS 10   /* after Muse makes a sound, 200 ms of capture is its own tail */
 #define REST_BACKSTOP_MS 60000
 
+/*
+ * The note being recorded is kept whole in PSRAM, so Hatch can take it at its
+ * own pace over a slow link. Nothing is saved for later: a press needs Hatch
+ * in reach, and a note that can't go is dropped with the reason shown.
+ */
 #if CONFIG_MUSE_HATCH
-/* A note recorded while Hatch is out of reach is saved in PSRAM, and goes once it's back. */
-#define HOLD_NOTES 1
+#define KEEP_REC 1
 #else
-#define HOLD_NOTES 0   /* no PSRAM: a press needs Hatch */
+#define KEEP_REC 0   /* no PSRAM: streams straight to Hatch */
 #endif
-#define HELD_MAX 4
-#define HELD_TRIES 8                            /* then a saved note is dropped */
-#define HELD_POLL_MS 5000                       /* resting with notes saved: check for Wi-Fi this often */
-#define HELD_KEEP_US (30LL * 60 * 1000000)      /* muse_voice_notes_waiting() */
-#define RETRY_MIN_US (15LL * 1000000)
-#define RETRY_MAX_US (120LL * 1000000)
 #define STALL_US (30LL * 1000000)               /* Hatch took none of a note this long: give up */
-#define ACK_WAIT_US (30LL * 1000000)            /* asleep, waiting for the VM to have a note */
 
 static QueueHandle_t s_queue;
 static volatile bool s_monitor;
@@ -96,29 +93,10 @@ static muse_adpcm_t s_pre_enc;
 static int16_t s_chunk[MUSE_AUDIO_CHUNK];
 static int s_settle;
 
-/*
- * The note being recorded (HOLD_NOTES), kept whole in case it can't go now.
- * Streaming, Hatch has had s_sent frames of it.
- */
+/* The note being recorded (KEEP_REC); Hatch has had s_sent frames of it. */
 static int16_t *s_rec;   /* MAX_FRAMES */
 static size_t s_rec_n, s_sent;
 static bool s_live = true;
-static bool s_tried;     /* it went to Hatch */
-
-typedef struct {
-    int16_t *pcm;
-    size_t frames;
-    int64_t at_us;   /* when it was recorded */
-    int tries;
-} held_note_t;
-
-static int s_held_count;
-static volatile bool s_waiting;        /* muse_voice_notes_waiting() */
-#if HOLD_NOTES
-static held_note_t s_held[HELD_MAX];   /* oldest first */
-static int64_t s_next_send_us;
-static int64_t s_send_backoff_us = RETRY_MIN_US;
-#endif
 
 /* The i-th oldest pre-roll chunk, into out. */
 static void pre_get(size_t i, int16_t *out)
@@ -207,7 +185,7 @@ static void keep(rec_stats_t *st, const int16_t *pcm, size_t n)
 /* Gives Hatch what it has room for of the note being recorded. */
 static void feed_live(void)
 {
-#if HOLD_NOTES
+#if KEEP_REC
     if (s_live && s_sent < s_rec_n) {
         s_sent += muse_hatch_turn_audio_wait(s_rec + s_sent, s_rec_n - s_sent, 0);
     }
@@ -218,7 +196,7 @@ static void feed_live(void)
 static void go_live(void)
 {
     muse_hatch_turn_begin();
-    s_live = s_tried = true;
+    s_live = true;
     s_sent = 0;
     feed_live();
 }
@@ -240,24 +218,19 @@ static void take(rec_stats_t *st, const int16_t *pcm)
 
 /*
  * Records speech until release or MAX_SECS, starting with the pre-roll; *held
- * gets the part after the press. It streams to Hatch as it goes if it can.
- * If not, the note is kept in s_rec to send later, and streams from partway
- * if Hatch comes within reach. Returns false if Hatch failed the turn with no
- * kept note to fall back on (why says what failed). There is no start chirp:
- * anything played now would land on top of the first words.
+ * gets the part after the press. It streams to Hatch as it goes, through
+ * s_rec when there is one. Returns false if Hatch failed the turn (why says
+ * what failed). There is no start chirp: anything played now would land on
+ * top of the first words.
  */
 static bool record(bool barge_in, size_t *held, char *why, size_t cap)
 {
     muse_state_set_mode(MUSE_MODE_LISTENING);
     muse_state_set_progress(0);
     s_rec_n = s_sent = 0;
-    s_live = s_tried = false;
-    if (!s_rec || (muse_hatch_ready() && !s_held_count)) {
-        go_live();
-    }
-    muse_state_set_caption(s_live ? "LISTENING..." : "RECORDING...");
+    go_live();
+    muse_state_set_caption("LISTENING...");
     bool heard = false, ok = true;
-    bool gave_up = false;   /* Hatch failed this note: it's kept, and goes later */
     char text[96];
     rec_stats_t st = { 0 };
 
@@ -283,8 +256,8 @@ static bool record(bool barge_in, size_t *held, char *why, size_t cap)
         }
         muse_state_set_level(muse_audio_level(s_chunk, MUSE_AUDIO_CHUNK));
         take(&st, s_chunk);
-        /* Live transcript as the caption. A failure stops the streaming; the
-         * kept note goes later, or without one the failure is the caption. */
+        /* Live transcript as the caption. A failure stops the streaming and
+         * becomes the caption; the note is dropped. */
         muse_hatch_ev_t ev;
         while (s_live && (ev = muse_hatch_turn_event(text, sizeof(text))) != MUSE_HATCH_EV_NONE) {
             if (ev == MUSE_HATCH_EV_HEARD && text[0]) {
@@ -294,23 +267,16 @@ static bool record(bool barge_in, size_t *held, char *why, size_t cap)
                 ESP_LOGW(TAG, "muse: %s", text);
                 muse_hatch_turn_cancel();
                 s_live = false;
-                gave_up = true;
-                if (!s_rec) {
-                    ok = false;
-                    strlcpy(why, text, cap);
-                    muse_state_set_caption("%s", text);
-                }
+                ok = false;
+                strlcpy(why, text, cap);
+                muse_state_set_caption("%s", text);
             }
         }
         n += MUSE_AUDIO_CHUNK;
         bool tick = n % (MUSE_AUDIO_CHUNK * 5) == 0;
-        if (tick && s_rec && !s_live && !gave_up && !s_held_count && muse_hatch_ready()) {
-            ESP_LOGI(TAG, "Muse in reach: streaming the note so far");
-            go_live();
-        }
         muse_state_set_progress((float)n / MAX_FRAMES);
         if (!heard && ok && tick) {
-            muse_state_set_caption("%s %.1fs", s_live ? "LISTENING" : "RECORDING", (double)n / MUSE_AUDIO_RATE);
+            muse_state_set_caption("LISTENING %.1fs", (double)n / MUSE_AUDIO_RATE);
         }
         /*
          * Capture runs 60-80 ms behind real time and people let go on their
@@ -502,76 +468,12 @@ static void drop_rec(void)
     s_rec = NULL;
 }
 
-#if HOLD_NOTES
-/* True if a press is queued, left there for the loop; releases ahead of it are dropped. */
-static bool press_waiting(void)
-{
-    muse_input_event_t ev;
-    while (xQueuePeek(s_queue, &ev, 0) == pdTRUE) {
-        if (ev.type == MUSE_PTT_DOWN) {
-            return true;
-        }
-        xQueueReceive(s_queue, &ev, 0);
-    }
-    return false;
-}
-
-static void back_off(void)
-{
-    s_next_send_us = esp_timer_get_time() + s_send_backoff_us;
-    s_send_backoff_us = s_send_backoff_us * 2 > RETRY_MAX_US ? RETRY_MAX_US : s_send_backoff_us * 2;
-}
-
-/* Saves the note just recorded to send later. `tried`: Hatch failed it, so it waits out the backoff. */
-static void hold_rec(bool tried)
-{
-    if (s_held_count >= HELD_MAX) {   /* can_record() leaves room: not expected */
-        drop_rec();
-        go_idle("COULDN'T SAVE THE NOTE");
-        return;
-    }
-    if (!s_rec_n) {   /* nothing captured: realloc to 0 would free s_rec and return NULL */
-        drop_rec();
-        go_idle("HOLD LONGER TO TALK");
-        return;
-    }
-    int16_t *pcm = heap_caps_realloc(s_rec, s_rec_n * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    s_held[s_held_count++] = (held_note_t){
-        .pcm = pcm ? pcm : s_rec,
-        .frames = s_rec_n,
-        .at_us = esp_timer_get_time(),
-        .tries = tried,
-    };
-    s_rec = NULL;
-    if (tried) {
-        back_off();
-    }
-    ESP_LOGI(TAG, "saved a %.1fs note to send later (%d waiting)", (double)s_rec_n / MUSE_AUDIO_RATE, s_held_count);
-    go_idle(tried ? "SAVED, WILL TRY AGAIN" : "SAVED, SENDS WHEN ONLINE");
-}
-
-static void drop_oldest(void)
-{
-    free(s_held[0].pcm);
-    s_held_count--;
-    memmove(s_held, s_held + 1, s_held_count * sizeof(s_held[0]));
-    if (!s_held_count) {
-        s_next_send_us = 0;
-        s_send_backoff_us = RETRY_MIN_US;
-    }
-}
-
-typedef enum {
-    FED,
-    FEED_FAILED,    /* the turn failed, or Hatch stopped taking audio */
-    FEED_PRESSED,   /* a press is queued: it goes first */
-} feed_t;
-
+#if KEEP_REC
 /*
- * Gives Hatch a note from *sent on, waiting for room as it goes, then ends
- * the turn. Stops for a press only if `yield`.
+ * Gives Hatch the rest of the note from s_sent on, waiting for room as it
+ * goes, then ends the turn. False if it failed (why says how).
  */
-static feed_t feed_rest(const int16_t *pcm, size_t frames, size_t *sent, bool yield)
+static bool feed_rest(char *why, size_t cap)
 {
     char text[96];
     int64_t moved = esp_timer_get_time();
@@ -580,169 +482,60 @@ static feed_t feed_rest(const int16_t *pcm, size_t frames, size_t *sent, bool yi
         while ((ev = muse_hatch_turn_event(text, sizeof(text))) != MUSE_HATCH_EV_NONE) {
             if (ev == MUSE_HATCH_EV_ERROR) {
                 ESP_LOGW(TAG, "muse: %s", text);
-                return FEED_FAILED;
+                strlcpy(why, text, cap);
+                return false;
             }
         }
-        if (*sent == frames) {
+        if (s_sent == s_rec_n) {
             break;
         }
-        if (yield && press_waiting()) {
-            return FEED_PRESSED;
-        }
-        size_t n = muse_hatch_turn_audio_wait(pcm + *sent, frames - *sent, 100);
-        *sent += n;
+        size_t n = muse_hatch_turn_audio_wait(s_rec + s_sent, s_rec_n - s_sent, 100);
+        s_sent += n;
         int64_t now = esp_timer_get_time();
         if (n) {
             moved = now;
         } else if (now - moved > STALL_US) {
             ESP_LOGW(TAG, "Muse stopped taking the note");
-            return FEED_FAILED;
+            strlcpy(why, "MUSE STOPPED LISTENING", cap);
+            return false;
         }
     }
     muse_hatch_turn_end();
-    return FED;
-}
-
-/* Asleep: waits for the VM to have the note just sent. */
-static bool wait_delivered(void)
-{
-    char text[96];
-    int64_t give_up = esp_timer_get_time() + ACK_WAIT_US;
-    while (esp_timer_get_time() < give_up) {
-        muse_hatch_ev_t ev;
-        while ((ev = muse_hatch_turn_event(text, sizeof(text))) != MUSE_HATCH_EV_NONE) {
-            if (ev == MUSE_HATCH_EV_SENT || ev == MUSE_HATCH_EV_REPLY || ev == MUSE_HATCH_EV_DONE) {
-                return true;
-            }
-            if (ev == MUSE_HATCH_EV_ERROR) {
-                ESP_LOGW(TAG, "muse: %s", text);
-                return false;
-            }
-        }
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-    ESP_LOGW(TAG, "no word that the note arrived");
-    return false;
-}
-
-/*
- * Sends the oldest saved note. Awake, it's a turn like any other, reply and
- * all; asleep (quiet), it's done once the VM has the note, and the reply
- * waits in the app. A press while it goes up comes first, and the note stays
- * saved. Returns true if a press interrupted the reply.
- */
-static bool send_held(bool quiet)
-{
-    held_note_t *h = &s_held[0];
-    ESP_LOGI(TAG, "sending a saved note%s: %.1fs, from %llds ago, try %d", quiet ? " (asleep)" : "",
-             (double)h->frames / MUSE_AUDIO_RATE, (long long)((esp_timer_get_time() - h->at_us) / 1000000),
-             h->tries + 1);
-    if (!quiet) {
-        muse_state_set_mode(MUSE_MODE_THINKING);
-        muse_state_set_caption("SENDING SAVED NOTE");
-    }
-    muse_hatch_turn_begin();
-    size_t sent = 0;
-    feed_t fed = feed_rest(h->pcm, h->frames, &sent, true);
-    bool delivered = false, interrupted = false;
-    if (fed == FED && quiet) {
-        delivered = wait_delivered();
-    } else if (fed == FED) {
-        interrupted = hatch_reply(&delivered);
-    }
-    if (fed != FED || quiet) {
-        muse_hatch_turn_cancel();   /* asleep, the reply is left for the app */
-    }
-    if (fed == FEED_PRESSED) {
-        if (!quiet) {
-            go_idle("");
-        }
-        return false;
-    }
-    const char *caption;
-    if (delivered || interrupted) {
-        drop_oldest();
-        s_next_send_us = 0;   /* the next one right away */
-        s_send_backoff_us = RETRY_MIN_US;
-        if (quiet) {
-            muse_state_set_caption("SAVED NOTE SENT");
-        }
-        return interrupted;
-    } else if (++h->tries >= HELD_TRIES) {
-        ESP_LOGW(TAG, "giving up on a saved note after %d tries", h->tries);
-        drop_oldest();
-        caption = "COULDN'T SEND A SAVED NOTE";
-    } else {
-        back_off();
-        caption = "SAVED NOTE: WILL TRY AGAIN";
-    }
-    if (quiet) {
-        muse_state_set_caption("%s", caption);
-    } else {
-        go_idle(caption);
-    }
-    return false;
-}
-
-/*
- * Whether to send a saved note now: Hatch within reach and the backoff over.
- * Coming within reach starts the backoff over. Keeps s_waiting too.
- */
-static bool held_due(void)
-{
-    static bool was_ready = true;
-    if (!s_held_count) {
-        was_ready = true;
-        s_waiting = false;
-        return false;
-    }
-    int64_t now = esp_timer_get_time();
-    s_waiting = now - s_held[0].at_us < HELD_KEEP_US;
-    bool ready = muse_hatch_ready();
-    if (ready && !was_ready) {
-        s_next_send_us = 0;
-        s_send_backoff_us = RETRY_MIN_US;
-    }
-    was_ready = ready;
-    return ready && now >= s_next_send_us;
+    return true;
 }
 #endif
 
 /*
- * After the release: the rest of the note goes to Hatch and the reply plays,
- * or if it can't go now it's saved to send later. Returns true if a press
- * interrupted the reply.
+ * After the release: the rest of the note goes to Hatch and the reply plays.
+ * If it can't go, it's dropped and the caption says why. Returns true if a
+ * press interrupted the reply.
  */
 static bool finish_note(void)
 {
     bool delivered;
-#if HOLD_NOTES
+#if KEEP_REC
     if (s_rec) {
-        bool fed = false, interrupted = false;
-        delivered = false;
-        if (s_live && s_sent == s_rec_n) {
+        bool fed = false;
+        if (s_sent == s_rec_n) {
             muse_hatch_turn_end();   /* before the chirp, which takes ~90 ms */
             fed = true;
         }
         muse_audio_chirp(0);
-        if (s_live && !fed) {
-            /* Hatch is behind (still connecting, say): the rest from the kept note. */
+        if (!fed) {
+            /* Hatch is behind (a slow link, say): the rest from the kept note. */
             muse_state_set_mode(MUSE_MODE_THINKING);
             muse_state_set_caption("SENDING VOICE NOTE");
-            fed = feed_rest(s_rec, s_rec_n, &s_sent, false) == FED;
-            if (!fed) {
+            char why[96];
+            if (!feed_rest(why, sizeof(why))) {
                 muse_hatch_turn_cancel();
+                drop_rec();
+                ESP_LOGI(TAG, "dropped a %.1fs note: %s", (double)s_rec_n / MUSE_AUDIO_RATE, why);
+                go_idle(why);
+                return false;
             }
         }
-        if (fed) {
-            interrupted = hatch_reply(&delivered);
-        }
-        if (delivered || interrupted) {
-            drop_rec();
-        } else {
-            hold_rec(s_tried);
-        }
-        return interrupted;
+        drop_rec();
+        return hatch_reply(&delivered);
     }
 #endif
     muse_hatch_turn_end();   /* before the chirp, which takes ~90 ms */
@@ -750,39 +543,22 @@ static bool finish_note(void)
     return hatch_reply(&delivered);
 }
 
-/*
- * Whether a press can record: Hatch within reach, or (HOLD_NOTES) set up
- * with room to save the note. If not, the caption says why.
- */
+/* Whether a press can record: Hatch within reach. If not, the caption says why. */
 static bool can_record(void)
 {
     if (!muse_wifi_connected()) {
         muse_wifi_apply();   /* retry now, not after the backoff */
     }
-    bool ready = muse_hatch_ready();
-#if HOLD_NOTES
-    muse_hatch_status_t st;
-    muse_hatch_status(&st);
-    if (st.state == MUSE_HATCH_NOT_SET) {
-        go_idle("SET UP MUSE FIRST");
-        return false;
-    }
-    if ((!ready || s_held_count) && s_held_count >= HELD_MAX) {
-        go_idle("NOTES STILL WAITING TO SEND");
-        return false;
-    }
-    if (ready && s_held_count) {
-        s_next_send_us = 0;   /* the saved ones go first, right after */
-    }
-    s_rec = heap_caps_malloc(MAX_FRAMES * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!s_rec) {
-        ESP_LOGE(TAG, "no memory to keep a note");
-    }
-#endif
-    if (!ready && !s_rec) {
+    if (!muse_hatch_ready()) {
         go_idle(not_ready_reason());
         return false;
     }
+#if KEEP_REC
+    s_rec = heap_caps_malloc(MAX_FRAMES * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_rec) {
+        ESP_LOGW(TAG, "no memory to keep the note: streaming it directly");
+    }
+#endif
     return true;
 }
 
@@ -797,30 +573,15 @@ static void voice_task(void *arg)
             bool asleep = muse_state_asleep();
             bool battery = muse_state_on_battery();
             bool rest = asleep && battery && !s_chirp && !s_mp3test && !s_loopback;
-#if HOLD_NOTES
-            /* A press goes first: send_held() leaves it queued and returns
-             * without backing off, so retrying before it's read would spin. */
-            if (held_due() && !press_waiting()) {
-                set_resting(false);   /* full power while it goes, even asleep */
-                muse_wifi_power(MUSE_WIFI_FULL);
-                pending_down = send_held(asleep);
-                pre_reset();
-                if (!pending_down && !asleep && muse_state_mode(NULL) != MUSE_MODE_IDLE) {
-                    muse_state_make_happy();
-                    go_idle("");
-                }
-                continue;
-            }
-#endif
             set_resting(rest);
             /* On battery Wi-Fi rests with the codecs, and between turns dozes
              * between beacons as xiaozhi's idle does; a press wakes it fully. */
             muse_wifi_power(rest ? MUSE_WIFI_REST : battery ? MUSE_WIFI_DOZE : MUSE_WIFI_FULL);
             if (rest) {
                 /* Wait for waking, USB power or a bench request without
-                 * polling (the timeout is only a backstop, or a look for
-                 * Wi-Fi to send saved notes), so the CPU can stay asleep. */
-                muse_state_wait_awake(s_waiting ? HELD_POLL_MS : REST_BACKSTOP_MS);
+                 * polling (the timeout is only a backstop), so the CPU can
+                 * stay asleep. */
+                muse_state_wait_awake(REST_BACKSTOP_MS);
                 continue;
             }
             if (s_chirp) {
@@ -874,6 +635,7 @@ static void voice_task(void *arg)
             continue;
         }
         if (!ok) {
+            drop_rec();
             pre_reset();
             go_idle(why);   /* Hatch failed it while recording */
             continue;
@@ -941,9 +703,4 @@ void muse_voice_request_mp3test(void)
 bool muse_voice_resting(void)
 {
     return s_resting;
-}
-
-bool muse_voice_notes_waiting(void)
-{
-    return s_waiting;
 }
