@@ -950,8 +950,17 @@ static void build_screen(void)
     lv_obj_set_flex_flow(status, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(status, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(status, s_small ? 4 : 8, 0);
-    lv_obj_align(status, LV_ALIGN_TOP_MID, 0, muse_board->rim_controls ? 40 : s_small ? 1 : 20 + s_dy);
-    s_clock_lbl = make_label(status, s_small ? &lv_font_unscii_8 : &lv_font_unscii_16, 0xbcd0f0);
+    /* charm: on a big round face the clock gets its own line at the top. In
+     * the status row it made the row too wide for the circle there, and the
+     * ring cut off its first digit. The rows under it move down to make room. */
+    bool clock_line = muse_board->round && !s_small && !muse_board->rim_controls;
+    int below_clock = clock_line ? 12 : 0;
+    lv_obj_align(status, LV_ALIGN_TOP_MID, 0,
+                 muse_board->rim_controls ? 40 : s_small ? 1 : 20 + s_dy + (clock_line ? 14 : 0));
+    s_clock_lbl = make_label(clock_line ? face : status, s_small ? &lv_font_unscii_8 : &lv_font_unscii_16, 0xbcd0f0);
+    if (clock_line) {
+        lv_obj_align(s_clock_lbl, LV_ALIGN_TOP_MID, 0, 16 + s_dy);
+    }
     s_wifi_icon = make_label(status, &lv_font_montserrat_14, COLOR_DIM);
     s_ble_icon = make_label(status, &lv_font_montserrat_14, COLOR_DIM);
     s_power_lbl = make_label(status, &lv_font_unscii_8, COLOR_DIM);
@@ -960,7 +969,7 @@ static void build_screen(void)
      * unless the screen is tall enough to fit it in small type above Muse. */
     s_state_lbl = make_label(face, s_small ? &lv_font_unscii_8 : &lv_font_unscii_16, 0xffffff);
     lv_obj_set_style_text_letter_space(s_state_lbl, s_small ? 1 : 2, 0);
-    lv_obj_align(s_state_lbl, LV_ALIGN_TOP_MID, 0, muse_board->rim_controls ? 64 : s_small ? 22 : 40 + s_dy);
+    lv_obj_align(s_state_lbl, LV_ALIGN_TOP_MID, 0, muse_board->rim_controls ? 64 : s_small ? 22 : 40 + s_dy + below_clock);
     lv_obj_set_flag(s_state_lbl, LV_OBJ_FLAG_HIDDEN, s_small && !s_tall && s_h < 200);
 
     /* This gadget's own name, dim under the state while it's unpaired: with
@@ -968,7 +977,7 @@ static void build_screen(void)
      * Muse app. update_chrome() fills it in, shortens it to the hex tail on a
      * screen too narrow for the whole thing, and empties it once paired. */
     s_name_lbl = make_label(face, s_small ? &lv_font_unscii_8 : &lv_font_unscii_16, COLOR_DIM);
-    lv_obj_align(s_name_lbl, LV_ALIGN_TOP_MID, 0, muse_board->rim_controls ? 88 : s_small ? 32 : 60 + s_dy);
+    lv_obj_align(s_name_lbl, LV_ALIGN_TOP_MID, 0, muse_board->rim_controls ? 88 : s_small ? 32 : 60 + s_dy + below_clock);
     if (muse_board->rim_controls) {
         /* Safe chord below the round panel's top, not the full 466 px width. */
         lv_obj_set_size(s_state_lbl, 280, lv_font_get_line_height(&lv_font_unscii_16));
