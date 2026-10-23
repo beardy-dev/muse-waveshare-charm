@@ -82,6 +82,7 @@
 #if CONFIG_MUSE_ENABLED
 #include "muse_glue.h"
 #include "muse_input.h"
+#include "charm_notify.h"
 // Muse joins Wi-Fi from its own settings, before or without pairing.
 #define WIFI_WITHOUT_PAIRING 1
 #else
@@ -1861,6 +1862,135 @@ static cJSON *bug_report_command(
 
 #endif  // CONFIG_HOMEHUB_BLE_COMMANDS
 
+#if CONFIG_MUSE_ENABLED
+static int hex_digit(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+// "#rrggbb" -> RGB565; false if malformed. Pure black becomes the darkest
+// non-zero colour, since 0 means transparent.
+static bool parse_rgb565(const char *s, uint16_t *out) {
+    if (!s || s[0] != '#' || strlen(s) != 7) return false;
+    int v[6];
+    for (int i = 0; i < 6; i++) {
+        if ((v[i] = hex_digit(s[i + 1])) < 0) return false;
+    }
+    int r = v[0] * 16 + v[1], g = v[2] * 16 + v[3], b = v[4] * 16 + v[5];
+    uint16_t c = (uint16_t)(((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3));
+    *out = c ? c : 0x0001;
+    return true;
+}
+
+// notify.show: everything is checked here, so the errors Muse reads say what to fix.
+static cJSON *notify_show_command(cJSON *params) {
+    static charm_notify_t n;   // only the Noise session's task runs commands
+    memset(&n, 0, sizeof(n));
+    char msg[96];
+
+    cJSON *id = params ? cJSON_GetObjectItem(params, "id") : NULL;
+    if (!cJSON_IsString(id) || !id->valuestring[0]) {
+        return command_error("missing_param", "id (string) is required");
+    }
+    if (strlen(id->valuestring) >= CHARM_ID_MAX) {
+        return command_error("invalid_param", "id is longer than 47 chars");
+    }
+    strlcpy(n.id, id->valuestring, sizeof(n.id));
+
+    cJSON *text = cJSON_GetObjectItem(params, "text");
+    if (text && !cJSON_IsNull(text)) {
+        if (!cJSON_IsString(text) || strlen(text->valuestring) >= CHARM_TEXT_MAX) {
+            return command_error("invalid_param", "text must be a string of at most 63 chars");
+        }
+        strlcpy(n.text, text->valuestring, sizeof(n.text));
+    }
+
+    n.actions = CHARM_ACTIONS_CONFIRM_DECLINE;
+    cJSON *actions = cJSON_GetObjectItem(params, "actions");
+    if (actions && !cJSON_IsNull(actions)) {
+        const char *a = cJSON_IsString(actions) ? actions->valuestring : "";
+        if (strcmp(a, "confirm_decline") == 0) n.actions = CHARM_ACTIONS_CONFIRM_DECLINE;
+        else if (strcmp(a, "confirm") == 0) n.actions = CHARM_ACTIONS_CONFIRM;
+        else if (strcmp(a, "none") == 0) n.actions = CHARM_ACTIONS_NONE;
+        else return command_error("invalid_param", "actions must be confirm_decline, confirm or none");
+    }
+
+    n.chime = true;
+    cJSON *chime = cJSON_GetObjectItem(params, "chime");
+    if (chime && !cJSON_IsNull(chime)) {
+        if (!cJSON_IsBool(chime)) return command_error("invalid_param", "chime must be true or false");
+        n.chime = cJSON_IsTrue(chime);
+    }
+
+    cJSON *icon = cJSON_GetObjectItem(params, "icon");
+    cJSON *palette = cJSON_IsObject(icon) ? cJSON_GetObjectItem(icon, "palette") : NULL;
+    cJSON *rows = cJSON_IsObject(icon) ? cJSON_GetObjectItem(icon, "rows") : NULL;
+    if (!cJSON_IsObject(palette) || !cJSON_IsArray(rows)) {
+        return command_error("invalid_param", "icon must be {\"palette\": {...}, \"rows\": [...]}");
+    }
+    uint16_t lut[128] = {0};
+    bool known[128] = {false};
+    int ncolors = 0;
+    cJSON *entry;
+    cJSON_ArrayForEach(entry, palette) {
+        const char *key = entry->string;
+        if (!key || strlen(key) != 1 || (unsigned char)key[0] >= 128 || key[0] == '.') {
+            return command_error("invalid_param", "palette keys must be single ASCII chars other than '.'");
+        }
+        uint16_t c;
+        if (!cJSON_IsString(entry) || !parse_rgb565(entry->valuestring, &c)) {
+            snprintf(msg, sizeof(msg), "palette '%c' must be a \"#rrggbb\" string", key[0]);
+            return command_error("invalid_param", msg);
+        }
+        if (++ncolors > 12) return command_error("invalid_param", "palette has more than 12 colours");
+        lut[(unsigned char)key[0]] = c;
+        known[(unsigned char)key[0]] = true;
+    }
+    if (cJSON_GetArraySize(rows) != CHARM_ICON_N) {
+        return command_error("invalid_param", "rows must have exactly 16 strings");
+    }
+    for (int y = 0; y < CHARM_ICON_N; y++) {
+        cJSON *row = cJSON_GetArrayItem(rows, y);
+        if (!cJSON_IsString(row) || strlen(row->valuestring) != CHARM_ICON_N) {
+            snprintf(msg, sizeof(msg), "row %d must be a string of exactly 16 chars", y);
+            return command_error("invalid_param", msg);
+        }
+        for (int x = 0; x < CHARM_ICON_N; x++) {
+            unsigned char ch = (unsigned char)row->valuestring[x];
+            if (ch == '.') continue;
+            if (ch >= 128 || !known[ch]) {
+                snprintf(msg, sizeof(msg), "row %d col %d: '%c' isn't in the palette", y, x, ch);
+                return command_error("invalid_param", msg);
+            }
+            n.icon[y * CHARM_ICON_N + x] = lut[ch];
+        }
+    }
+
+    bool replaced = false;
+    if (!charm_notify_show(&n, &replaced)) {
+        return command_error("not_ready", "the charm's screen isn't up yet; try again shortly");
+    }
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "ok", true);
+    cJSON *payload = cJSON_AddObjectToObject(result, "payload");
+    cJSON_AddBoolToObject(payload, "shown", true);
+    cJSON_AddBoolToObject(payload, "replaced", replaced);
+    return result;
+}
+
+static cJSON *notify_clear_command(cJSON *params) {
+    cJSON *id = params ? cJSON_GetObjectItem(params, "id") : NULL;
+    bool cleared = charm_notify_clear(cJSON_IsString(id) ? id->valuestring : NULL);
+    cJSON *result = cJSON_CreateObject();
+    cJSON_AddBoolToObject(result, "ok", true);
+    cJSON *payload = cJSON_AddObjectToObject(result, "payload");
+    cJSON_AddBoolToObject(payload, "cleared", cleared);
+    return result;
+}
+#endif
+
 static cJSON *on_ws_command(
     const char *command, cJSON *params, const char *request_id,
     noise_ctrl_session_generation_t session_generation) {
@@ -1925,6 +2055,14 @@ static cJSON *on_ws_command(
         cJSON *async = cJSON_CreateObject();
         cJSON_AddBoolToObject(async, "_async", true);
         return async;
+    }
+#endif
+#if CONFIG_MUSE_ENABLED
+    if (strcmp(command, "notify.show") == 0) {
+        return notify_show_command(params);
+    }
+    if (strcmp(command, "notify.clear") == 0) {
+        return notify_clear_command(params);
     }
 #endif
 #if CONFIG_HOMEHUB_VOICE

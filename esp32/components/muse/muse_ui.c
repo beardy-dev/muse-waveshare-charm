@@ -29,6 +29,7 @@
 #include "lvgl.h"
 #include "mbedtls/base64.h"
 #include "src/draw/lv_image_decoder_private.h"   /* custom decoder */
+#include "charm_notify.h"
 #include "src/misc/lv_area_private.h"            /* lv_area_intersect, for the ring */
 
 #include "muse_ble.h"
@@ -1641,6 +1642,7 @@ static void frame_tick(lv_timer_t *timer)
     if (update_sleep()) {
         return;
     }
+    charm_notify_tick(now);   /* charm: notify.show over everything */
 #if CONFIG_MUSE_VIDEO
     if (muse_video_tick()) {
         muse_menu_close();

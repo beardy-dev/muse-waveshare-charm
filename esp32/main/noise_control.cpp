@@ -1497,6 +1497,48 @@ static char *build_register_json(void) {
     }
 #endif
 
+#if CONFIG_MUSE_ENABLED
+    // Charm notifications (charm_notify.c): Muse pings Andrew with a pixel-art
+    // icon and a chirp; his tap comes back later as a typed chat message.
+    {
+        cJSON *required = cJSON_CreateObject();
+        cJSON_AddItemToObject(required, "id",
+                              string_param("Your id for this reminder, e.g. meds-2026-10-23 (max 47 chars). "
+                                           "Re-sending the same id replaces it on screen (a nudge) and "
+                                           "chirps again; the answer message echoes it."));
+        cJSON *icon = cJSON_CreateObject();
+        cJSON_AddStringToObject(icon, "type", "object");
+        cJSON_AddStringToObject(icon, "description",
+                                "16x16 pixel art: {\"palette\": {\"b\": \"#3fa2ff\", ...}, \"rows\": "
+                                "[16 strings of 16 chars]}. Each char is one pixel: a palette key "
+                                "(one char, up to 12 colours) or '.' for transparent (black). "
+                                "Bold shapes read best; it's shown 10x, floating.");
+        cJSON_AddItemToObject(required, "icon", icon);
+        cJSON *optional = cJSON_CreateObject();
+        cJSON_AddItemToObject(optional, "text",
+                              string_param("One short line under the icon, ASCII, max 63 chars."));
+        cJSON_AddItemToObject(optional, "actions",
+                              string_param("Buttons: \"confirm_decline\" (green check + red X, default), "
+                                           "\"confirm\" (check only) or \"none\" (tap anywhere to dismiss)."));
+        cJSON *chime = cJSON_CreateObject();
+        cJSON_AddStringToObject(chime, "type", "boolean");
+        cJSON_AddStringToObject(chime, "description", "Chirp when shown; default true.");
+        cJSON_AddItemToObject(optional, "chime", chime);
+        add_command(commands, "notify.show",
+                    "Show a notification on Andrew's charm over the avatar, waking the screen. "
+                    "Returns at once. When Andrew taps, you get a typed chat message "
+                    "\"[charm notify] id=<id> answer=<confirmed|declined|seen> ...\", possibly "
+                    "much later; that is from the charm, not Andrew typing.",
+                    required, optional);
+        cJSON *clear_optional = cJSON_CreateObject();
+        cJSON_AddItemToObject(clear_optional, "id",
+                              string_param("Only clear if this id is showing; omit to clear any."));
+        add_command(commands, "notify.clear",
+                    "Remove the notification from the charm's screen without an answer.",
+                    nullptr, clear_optional);
+    }
+#endif
+
 #if CONFIG_HOMEHUB_VOICE
     cJSON *volume_optional = cJSON_CreateObject();
     cJSON *volume_param = cJSON_CreateObject();

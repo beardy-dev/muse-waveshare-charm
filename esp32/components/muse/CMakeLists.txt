@@ -29,6 +29,7 @@ if(CONFIG_MUSE_ENABLED)
         "muse_state.c"
         "muse_battery.c"
         "muse_ui.c"
+        "charm_notify.c"
         "muse_audio.c"
         "muse_pmu.c"
         "muse_input.c"
