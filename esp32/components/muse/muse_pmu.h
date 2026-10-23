@@ -38,6 +38,10 @@
  * PMU interrupt is turned off. */
 esp_err_t muse_pmu_init(i2c_master_bus_handle_t bus, bool key_irqs);
 
+/* Whether holding PWR makes the PMU cut power (10 s off, 16 s PMU reset).
+ * Turn it off where PWR is the talk key, or a long note power-cycles the board. */
+esp_err_t muse_pmu_set_hold_off(bool on);
+
 /* Turns off every rail but these, by their enable bits: dcdc has DCDC1-5 in
  * bits 0-4; ldo has ALDO1-4, BLDO1-2, CPUSLDO and DLDO1 in bits 0-7 and DLDO2
  * in bit 8. Turns nothing on. */

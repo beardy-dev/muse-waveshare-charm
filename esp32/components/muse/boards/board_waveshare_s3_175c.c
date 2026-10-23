@@ -28,8 +28,12 @@
 #include "bsp/display.h"
 #include "bsp/esp-bsp.h"
 #include "bsp/touch.h"
+#include <string.h>
+
 #include "driver/gpio.h"
+#include "esp_attr.h"
 #include "esp_check.h"
+#include "esp_system.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_log.h"
 #include "esp_lv_adapter.h"
@@ -59,8 +63,31 @@ static muse_gpio_button_t s_boot;
 static muse_gpio_button_t s_pwr;
 #endif
 
+/*
+ * The last few boots' reset reasons, newest first, in RAM a reset keeps. Opening
+ * the USB port resets the chip, so by the time anyone reads the log the
+ * current boot's reason is just "usb"; the one before is the answer.
+ */
+#define BOOT_HISTORY 6
+static RTC_NOINIT_ATTR uint32_t s_boot_magic;
+static RTC_NOINIT_ATTR uint8_t s_boot_reasons[BOOT_HISTORY];
+
+static void log_boot_history(void)
+{
+    if (s_boot_magic != 0xB007CAFE || esp_reset_reason() == ESP_RST_POWERON) {
+        memset(s_boot_reasons, 0, sizeof(s_boot_reasons));
+        s_boot_magic = 0xB007CAFE;
+    }
+    memmove(s_boot_reasons + 1, s_boot_reasons, BOOT_HISTORY - 1);
+    s_boot_reasons[0] = esp_reset_reason();
+    /* esp_reset_reason_t: 1 power on, 3 software, 4 panic, 5-7 watchdogs, 9 brownout, 11 usb */
+    ESP_LOGI(TAG, "reset reasons, newest first: %u %u %u %u %u %u", s_boot_reasons[0], s_boot_reasons[1],
+             s_boot_reasons[2], s_boot_reasons[3], s_boot_reasons[4], s_boot_reasons[5]);
+}
+
 static esp_err_t init(void)
 {
+    log_boot_history();
     ESP_RETURN_ON_ERROR(bsp_i2c_init(), TAG, "i2c init");
     ESP_RETURN_ON_ERROR(muse_gpio_button_init(&s_boot, GPIO_NUM_0), TAG, "boot button");
 #if CONFIG_MUSE_BOARD_WAVESHARE_S3_175
@@ -78,6 +105,13 @@ static esp_err_t init(void)
         ESP_LOGW(TAG, "PMU unavailable (%s): battery status disabled", esp_err_to_name(err));
         return ESP_OK;
     }
+#if !CONFIG_MUSE_BOARD_WAVESHARE_S3_175
+    /* PWR talks here, and a note can outlast the PMU's 10 s hold-to-off. */
+    err = muse_pmu_set_hold_off(false);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "PWR hold-to-off left on (%s)", esp_err_to_name(err));
+    }
+#endif
     /* Only DCDC1 (VCC3V3) and ALDO1 (A3V3, for the codecs) feed anything; the
      * schematic leaves the rest unconnected. Waveshare's AXP2101 example and
      * xiaozhi's board turn them off too. */

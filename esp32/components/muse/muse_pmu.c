@@ -25,7 +25,10 @@ static const char *TAG = "muse_pmu";
 
 #define REG_STATUS1 0x00        /* bit5 VBUS good, bit3 battery present */
 #define REG_STATUS2 0x01        /* bits[6:5] 01 = charging */
-#define REG_COMMON_CFG 0x10     /* bit0 = soft power-off */
+#define REG_COMMON_CFG 0x10     /* bit0 = soft power-off, bit2 = PWR held 16 s resets the PMU */
+#define REG_PWRON_STATUS 0x20   /* what turned the PMU on last */
+#define REG_PWROFF_STATUS 0x21  /* what turned it off last */
+#define REG_PWROFF_EN 0x22     /* bit1 = power-key hold-to-off enable */
 #define REG_IRQ_LEVEL 0x27      /* bits[3:2] power-key hold-to-off time */
 #define REG_ADC_ENABLE 0x30     /* bit0 = battery voltage */
 #define REG_VBAT_H 0x34         /* bits[4:0]; 1 mV per count with REG_VBAT_L */
@@ -46,8 +49,9 @@ static const char *TAG = "muse_pmu";
 #define PKEY_SHORT (1u << 3)
 #define PKEY_ALL (PKEY_POS_EDGE | PKEY_NEG_EDGE | PKEY_LONG | PKEY_SHORT)
 
-/* bits[3:2] = 11 -> 10 s: longer than the 8 s talk limit, and a hardware
- * fallback if the firmware is wedged. */
+/* bits[3:2] = 11 -> 10 s, a hardware fallback if the firmware is wedged.
+ * Shorter than a note can be: boards where PWR talks turn it off
+ * (muse_pmu_set_hold_off). */
 #define PKEY_OFF_10S (3u << 2)
 
 static i2c_master_dev_handle_t s_dev;
@@ -97,7 +101,13 @@ esp_err_t muse_pmu_init(i2c_master_bus_handle_t bus, bool key_irqs)
     ESP_RETURN_ON_ERROR(rd(REG_ADC_ENABLE, &v), TAG, "read adc enable");
     ESP_RETURN_ON_ERROR(wr(REG_ADC_ENABLE, v | 0x01), TAG, "enable battery voltage");
 
-    ESP_LOGI(TAG, "AXP2101 ready (hardware PWR hold-off 10 s)");
+    /* Why the PMU last turned on and off; an ESP32 reset leaves both. Off
+     * bits: 7 die hot, 6/5 DCDC over/under volt, 4 VBUS over volt, 3 VSYS
+     * under volt, 2 PWROK low, 1 software, 0 PWR held. */
+    uint8_t on_src = 0, off_src = 0;
+    rd(REG_PWRON_STATUS, &on_src);
+    rd(REG_PWROFF_STATUS, &off_src);
+    ESP_LOGI(TAG, "AXP2101 ready (hardware PWR hold-off 10 s), last on %02x, last off %02x", on_src, off_src);
     return ESP_OK;
 }
 
@@ -167,6 +177,21 @@ esp_err_t muse_pmu_read_power(muse_power_t *out)
     if (battery && rd(REG_VBAT_H, &hi) == ESP_OK && rd(REG_VBAT_L, &lo) == ESP_OK) {
         out->battery_mv = (hi & 0x1F) << 8 | lo;
     }
+    return ESP_OK;
+}
+
+esp_err_t muse_pmu_set_hold_off(bool on)
+{
+    uint8_t v, c;
+    if (!s_dev) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    ESP_RETURN_ON_ERROR(rd(REG_PWROFF_EN, &v), TAG, "read pwroff en");
+    ESP_RETURN_ON_ERROR(wr(REG_PWROFF_EN, on ? v | 0x02 : v & ~0x02), TAG, "set hold-off");
+    /* Apart from that, PWR held 16 s resets the whole PMU: a power cycle. */
+    ESP_RETURN_ON_ERROR(rd(REG_COMMON_CFG, &c), TAG, "read common cfg");
+    ESP_RETURN_ON_ERROR(wr(REG_COMMON_CFG, on ? c | 0x04 : c & ~0x04), TAG, "set 16 s reset");
+    ESP_LOGI(TAG, "PWR hold-to-off %s (pwroff_en %02x, common cfg %02x)", on ? "on" : "off", v, c);
     return ESP_OK;
 }
 
