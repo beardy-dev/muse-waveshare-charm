@@ -33,6 +33,7 @@ static picotts_idle_notify_fn idleCb;
 static SemaphoreHandle_t exitLock;
 static QueueHandle_t textQ;
 static TaskHandle_t picoTask;
+static volatile bool abortReq;   // charm: picotts_abort()
 
 static void *picoMemArea;
 
@@ -146,6 +147,16 @@ static void esp_pico_run(void *)
         break;
     }
 
+    // charm: drop the text not yet said and flush the engine
+    if (abortReq)
+    {
+      abortReq = false;
+      xQueueReset(textQ);
+      pico_resetEngine(picoEngine, PICO_RESET_SOFT);
+      state = WAITING_FOR_BYTES;
+      idles = 0;
+    }
+
     uint8_t c;
     while (xQueuePeek(textQ, &c, 0) == pdPASS)
     {
@@ -164,6 +175,13 @@ static void esp_pico_run(void *)
           xQueueReceive(textQ, &c, 0);
           if (state == WAITING_FOR_BYTES)
             state = WAITING_FOR_OUTPUT;
+        }
+        else
+        {
+          // charm: the engine's input is full: make speech to make room,
+          // rather than offering it the same byte forever
+          state = WAITING_FOR_OUTPUT;
+          break;
         }
       }
     }
@@ -190,7 +208,9 @@ static void esp_pico_run(void *)
             pico_getData(picoEngine, outbuf, sizeof(outbuf), &bytes, &type);
           if (bytes > 0)
             outputCb(outbuf, bytes/2);
-        } while (status == PICO_STEP_BUSY);
+        } while (status == PICO_STEP_BUSY && !abortReq);
+        if (abortReq)
+          break;   // charm: flushed at the top of the loop
         if (status != PICO_STEP_IDLE)
         {
           esp_pico_err_print("Get data failed, stopping TTS", status);
@@ -253,7 +273,7 @@ static void esp_pico_cleanup(void)
 
   if (textQ)
   {
-    vQueueDelete(textQ);
+    vQueueDeleteWithCaps(textQ);
     textQ = NULL;
   }
 }
@@ -335,7 +355,9 @@ bool picotts_init(unsigned prio, picotts_output_fn cb, int core)
 
   #undef PICO_INIT_CHECK
 
-  textQ = xQueueCreate(CONFIG_PICOTTS_INPUT_QUEUE_SIZE, sizeof(char));
+  // charm: in PSRAM, sized to take a whole reply without blocking
+  textQ = xQueueCreateWithCaps(CONFIG_PICOTTS_INPUT_QUEUE_SIZE, sizeof(char),
+      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (!textQ)
   {
     ESP_LOGE(tag, "Failed to create input queue");
@@ -363,6 +385,12 @@ void picotts_add(const char *text, unsigned len)
 {
   while(len--)
     xQueueSendToBack(textQ, text++, portMAX_DELAY);
+}
+
+
+void picotts_abort(void)
+{
+  abortReq = true;
 }
 
 

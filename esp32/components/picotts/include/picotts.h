@@ -42,6 +42,13 @@ bool picotts_init(unsigned prio, picotts_output_fn output_cb, int core);
 void picotts_add(const char *txt, unsigned len);
 
 /**
+ * charm: drops the text not yet spoken and flushes the engine. Samples
+ * already handed to the output callback are the caller's to discard. The
+ * idle callback follows once it has stopped.
+ */
+void picotts_abort(void);
+
+/**
  * Stops the TTS engine task and frees the used memory resources.
  * Call @c picotts_init() again to reinitialise, if needed.
  */

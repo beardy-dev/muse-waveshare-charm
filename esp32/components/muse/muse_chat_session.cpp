@@ -72,6 +72,7 @@ extern "C" {
 #include "muse_wifi.h"
 }
 #include "muse_chat_priv.h"
+#include "charm_tts.h"
 
 #include <xplat/noise/core/ClientSession.h>
 #include <xplat/noise/core/PsaCryptoBackend.h>
@@ -244,6 +245,7 @@ struct turn_t {
     /* TTS */
     int tts_msg;             /* message being fetched (or shown, speaker off), or -1 */
     bool silent;             /* speaker off: tts_msg is paced by silence, not fetched */
+    bool pico;               /* charm: tts_msg is spoken on the charm (charm_tts.h) */
     uint8_t *mp3;            /* MP3_BUF */
     size_t mp3_len;
     bool mp3_ended;
@@ -965,6 +967,10 @@ static void turn_finish(void)
     s_turn.dict_id = s_turn.chat_id = 0;
     s_turn.tts_msg = -1;
     s_turn.silent = false;
+    if (s_turn.pico) {
+        charm_tts_cancel();   /* a press cut the reply off, or it failed */
+        s_turn.pico = false;
+    }
     s_turn.mp3_len = 0;
 }
 
@@ -1532,7 +1538,22 @@ static void start_tts(void)
          * rest, so hold off while it's full) and set s_turn.mp3_ended at the
          * end. decode() plays it at the speaker's volume, captions following,
          * and finishes the message once it's drained.
+         *
+         * charm: with the speaker on, the charm says it itself (PicoTTS,
+         * charm_tts.h); the silence below is the fallback.
          */
+        const char *text = s_turn.texts ? s_turn.texts + i * TEXT_MAX : nullptr;
+        if (text && muse_settings_speaker_on() && charm_tts_begin(text)) {
+            m.pcm_start = s_turn.pcm_out;
+            m.pcm_frames = 0;   /* known once it's all said; captions estimate till then */
+            m.tts = TTS_ACTIVE;
+            s_turn.tts_msg = i;
+            s_turn.silent = false;
+            s_turn.pico = true;
+            ESP_LOGI(TAG, "speaking message %s (%u chars)", m.id, (unsigned)m.len);
+            show_reply_start(m);
+            return;
+        }
         m.pcm_start = s_turn.pcm_out;
         m.pcm_frames = (uint32_t)(m.len * MIC_RATE / TEXT_CHARS_PER_S);
         m.tts = TTS_ACTIVE;
@@ -1588,6 +1609,30 @@ static void pace_silently(void)
     }
 }
 
+/* charm: moves the charm's own speech into the reply buffer while it has room. */
+static void speak_pico(void)
+{
+    static int16_t buf[256];
+    msg_t &m = s_turn.msgs[s_turn.tts_msg];
+    while (xStreamBufferSpacesAvailable(s_out) >= sizeof(buf)) {
+        size_t n = charm_tts_read(buf, 256);
+        if (!n) {
+            break;
+        }
+        if (s_turn.gen == s_gen.load()) {
+            mark(M_AUDIO);
+            xStreamBufferSend(s_out, buf, n * sizeof(int16_t), 0);
+        }
+        s_turn.pcm_out += n;
+    }
+    if (charm_tts_done()) {
+        m.pcm_frames = s_turn.pcm_out - m.pcm_start;
+        m.tts = TTS_FINISHED;
+        s_turn.tts_msg = -1;
+        s_turn.pico = false;
+    }
+}
+
 /* Decodes buffered MP3 while the reply buffer has room. */
 static void decode(void)
 {
@@ -1596,6 +1641,10 @@ static void decode(void)
     }
     if (s_turn.silent) {
         pace_silently();
+        return;
+    }
+    if (s_turn.pico) {
+        speak_pico();
         return;
     }
     /*
