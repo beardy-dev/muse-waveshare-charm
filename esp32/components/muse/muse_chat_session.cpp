@@ -107,8 +107,8 @@ static_assert(MP3_BUF > MP3_POLL_ROOM + MP3_HOLD, "reads would stall with the MP
 #define EV_TEXT 72
 #define TEXT_MAX 1024                      /* a message's text, for captions timed to its speech */
 #define SPEECH_CHARS_PER_S 14              /* until the speech's length is known */
-#define TEXT_CHARS_PER_S 16                /* speaker off: reading pace, a little over speech */
-#define TEXT_HOLD_S 2                      /* speaker off: how long a message's last lines stay up */
+#define TEXT_CHARS_PER_S 10                /* speaker off: reading pace (charm: slowed from 16) */
+#define TEXT_HOLD_S 4                      /* speaker off: how long a message's last lines stay up (charm: from 2) */
 
 #define PING_US (20 * 1000000LL)
 #define DEAD_US (60 * 1000000LL)           /* nothing from the server, pongs included */
