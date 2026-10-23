@@ -11,6 +11,7 @@
 #include "freertos/semphr.h"
 #include "lvgl.h"
 
+#include "charm_token.h"
 #include "muse_chat.h"
 #include "muse_mem.h"
 #include "muse_state.h"
@@ -18,9 +19,9 @@
 
 static const char *TAG = "charm_notify";
 
-/* Scale of the icon (16 px -> 160 px) and the button glyphs (12 px -> 48 px). */
-#define ICON_SCALE 10
-#define ICON_PX (CHARM_ICON_N * ICON_SCALE)
+/* The icon is drawn as a 3D token (charm_token.c); the button glyphs are flat, 12 px -> 48 px. */
+#define ICON_PX CHARM_TOKEN_PX
+_Static_assert(CHARM_ICON_N == CHARM_TOKEN_N, "notify icons and tokens must be the same size");
 #define GLYPH_N 12
 #define GLYPH_SCALE 4
 #define GLYPH_PX (GLYPH_N * GLYPH_SCALE)
@@ -238,7 +239,8 @@ static void build(void)
 
 static void present(float now)
 {
-    scale_icon(s_cur->icon, CHARM_ICON_N, ICON_SCALE, s_icon_buf);
+    charm_token_prepare(s_cur->icon);
+    charm_token_render(0, s_icon_buf);
     /* Same buffer, new pixels: re-setting the source makes LVGL redraw it. */
     lv_image_set_src(s_icon, NULL);
     lv_image_set_src(s_icon, &s_icon_dsc);
@@ -321,7 +323,10 @@ void charm_notify_tick(float now)
         ESP_LOGI(TAG, "cleared");
     }
     if (!lv_obj_has_flag(s_panel, LV_OBJ_FLAG_HIDDEN)) {
-        /* It floats, like GUPPI: a slow bob. */
-        lv_obj_set_y(s_icon, s_icon_y + (int)lroundf(sinf((now - s_shown_at) * 1.8f) * 8.0f));
+        /* It floats and rocks, like GUPPI. */
+        float t = now - s_shown_at;
+        charm_token_render(t, s_icon_buf);
+        lv_obj_invalidate(s_icon);
+        lv_obj_set_y(s_icon, s_icon_y + (int)lroundf(sinf(t * 1.8f) * 8.0f));
     }
 }
