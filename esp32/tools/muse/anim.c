@@ -39,6 +39,9 @@ typedef struct {
     float start_mode_t;     /* mode_t at the first recorded frame */
     bool talky;             /* drive `level` like live speech */
     bool pet;               /* play a happy reaction partway through */
+    bool bit_no;            /* charm: a tap partway through (Bit's "No") */
+    muse_mode_t then;       /* charm: switch to this mode at then_at, if then_at > 0 */
+    float then_at;
 } anim_t;
 
 static const anim_t ANIMS[] = {
@@ -48,6 +51,8 @@ static const anim_t ANIMS[] = {
     { "thinking", MUSE_MODE_THINKING, 4.0f, 0 },
     { "speaking", MUSE_MODE_SPEAKING, 4.0f, 0, .talky = true },
     { "happy", MUSE_MODE_IDLE, 3.0f, 9, .pet = true },
+    { "pet", MUSE_MODE_IDLE, 5.0f, 9, .bit_no = true },
+    { "reply", MUSE_MODE_THINKING, 4.0f, 0, .talky = true, .then = MUSE_MODE_SPEAKING, .then_at = 1.0f },
     { "off", MUSE_MODE_OFF, 2.0f, 0 },
     { "error", MUSE_MODE_ERROR, 3.0f, 0 },
 };
@@ -99,12 +104,14 @@ int main(int argc, char **argv)
         int warm = (int)(WARMUP / DT + 0.5f);
         for (int i = -warm; i < frames; i++) {
             float rt = i * DT;      /* seconds into the recording */
+            bool later = an->then_at > 0 && rt >= an->then_at;
             muse_pose_t p = {
-                .mode = an->mode,
+                .mode = later ? an->then : an->mode,
                 .t = base + rt,
-                .mode_t = an->start_mode_t + rt,
+                .mode_t = later ? rt - an->then_at : an->start_mode_t + rt,
                 .level = an->talky ? speech_level(rt) : 0,
                 .happy = an->pet ? happiness(rt - 0.5f) : 0,
+                .pet = an->bit_no && rt >= 0.5f && rt < 3.5f ? 1.0f : 0.0f,   /* PET_SECS */
             };
             /* Modes that start at 0 hold their first frame during warm-up. */
             if (p.mode_t < 0) {

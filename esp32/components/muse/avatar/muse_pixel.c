@@ -14,7 +14,12 @@
  * navy silhouette. A soft blue glow lies on an invisible floor beneath it.
  *
  * Personality: calm and precise. It floats, turns lazily, leans in to listen,
- * tumbles while it thinks, bounces as it speaks, hops and sparkles when petted.
+ * tumbles while it thinks, hops and sparkles when a reply is done.
+ *
+ * Bit, from Tron: speaking, it morphs into a yellow-orange octahedron (Bit's
+ * "Yes"); petted (a tap), it turns red and morphs into the second stellation
+ * of the icosahedron (Bit's "No", Wenninger W27, charm_shapes.h). A morph
+ * shrinks one shape while the next grows through it, with a quick spin.
  *
  * The palette blend, set_size/scale and sparkle code are the default
  * avatar's (Apache-2.0, Meta); the crystal is new.
@@ -66,14 +71,16 @@ static const scheme_t SCHEMES[MUSE_MODE_COUNT] = {
     [MUSE_MODE_IDLE]      = { { 0xa8e4ff, 0x52a6ff, 0x2a62d8, 0x163890 }, 0x5aa8ff },
     [MUSE_MODE_LISTENING] = { { 0x9ef2ff, 0x4fd2f6, 0x2290dc, 0x13509c }, 0x5ff0ff },
     [MUSE_MODE_THINKING]  = { { 0x96d2ff, 0x468ef0, 0x2654c0, 0x132c7c }, 0x4a86e8 },
-    [MUSE_MODE_SPEAKING]  = { { 0xb8ecff, 0x62b8ff, 0x2e70e4, 0x183c98 }, 0x6abcff },
+    [MUSE_MODE_SPEAKING]  = { { 0xfff0a8, 0xffc23c, 0xf08414, 0x8c3f06 }, 0xffb02e },   /* Bit's "Yes" */
     [MUSE_MODE_ERROR]     = { { 0xffc8ec, 0xd668d8, 0x9a2aa8, 0x4a1460 }, 0xe05cc0 },
     [MUSE_MODE_OFF]       = { { 0x24306a, 0x18224e, 0x111a3e, 0x0c1330 }, 0x1a2450 },
 };
 
+/* Petted: Bit's "No". */
+static const scheme_t PET_SCHEME = { { 0xffb4a0, 0xff4a36, 0xc8160e, 0x640606 }, 0xff3a24 };
+
 static const uint32_t FIXED[C_COUNT] = {
     [C_BG] = 0x000000,
-    [C_NAVY] = 0x081236,
     [C_WHITE] = 0xffffff,
 };
 
@@ -149,6 +156,7 @@ static void update_palette(const scheme_t *target, float dt)
     pal[C_F1] = s_scheme[1];
     pal[C_F2] = s_scheme[2];
     pal[C_F3] = s_scheme[3];
+    pal[C_NAVY] = scale_rgb(s_scheme[3], 0.36f);   /* shadow: the deepest shade, darker (navy on blue) */
     pal[C_HI] = mix(s_scheme[0], pal[C_WHITE], 0.45f);
     pal[C_ACC] = acc;
     pal[C_RIM] = mix(s_scheme[1], acc, 0.5f);
@@ -254,14 +262,36 @@ typedef struct {
 } v3_t;
 
 typedef struct {
-    uint8_t n;                  /* 3 or 5 */
-    uint8_t v[5];               /* CCW seen from outside */
+    uint8_t n;                  /* 3 to 5 */
+    uint8_t v[5];               /* corners in order around it */
     v3_t nrm;                   /* outward unit normal */
     float order;                /* 0..1: when it assembles at boot */
 } face_t;
 
 static v3_t s_vert[NV];
 static face_t s_face[NF];
+
+/* A shape to draw: vertices times `radius`, convex faces. */
+typedef struct {
+    const v3_t *v;
+    const face_t *f;
+    int nv, nf;
+    float radius;
+} mesh_t;
+
+#include "charm_shapes.h"        /* W27, Bit's "No" */
+
+#define NV_OCT 6
+static v3_t s_oct_v[NV_OCT];
+static face_t s_oct_f[8];
+
+enum { SHAPE_CRYSTAL, SHAPE_YES, SHAPE_NO };
+static const mesh_t SHAPES[] = {
+    [SHAPE_CRYSTAL] = { s_vert, s_face, NV, NF, 1.0f },
+    [SHAPE_YES] = { s_oct_v, s_oct_f, NV_OCT, 8, 1.0f },
+    [SHAPE_NO] = { W27_V, W27_F, W27_NV, W27_NF, 2.1f },   /* spike tips; the core is a third of that */
+};
+#define MAX_V (W27_NV > NV ? W27_NV : NV)
 
 static inline v3_t v3(float x, float y, float z)
 {
@@ -290,14 +320,14 @@ static inline v3_t norm3(v3_t a)
  * under each dodecahedron vertex. Its corners are the other solid's vertices
  * nearest that direction, sorted around it.
  */
-static void build_face(face_t *f, v3_t dir, int first, int count, int n)
+static void build_face(face_t *f, const v3_t *verts, v3_t dir, int first, int count, int n)
 {
     v3_t nrm = norm3(dir);
     float best[5];
     int idx[5];
     int k = 0;
     for (int i = first; i < first + count; i++) {
-        float d = dot3(s_vert[i], nrm);
+        float d = dot3(verts[i], nrm);
         if (k < n) {
             best[k] = d;
             idx[k++] = i;
@@ -318,7 +348,7 @@ static void build_face(face_t *f, v3_t dir, int first, int count, int n)
     v3_t w = cross3(nrm, u);
     float ang[5];
     for (int i = 0; i < n; i++) {
-        v3_t p = s_vert[idx[i]];
+        v3_t p = verts[idx[i]];
         ang[i] = atan2f(dot3(p, w), dot3(p, u));
     }
     for (int i = 1; i < n; i++) {
@@ -357,16 +387,27 @@ static void init_crystal(void)
     }
     int f = 0;
     for (int i = 0; i < NV_I; i++) {
-        build_face(&s_face[f++], s_vert[NV_D + i], 0, NV_D, 5);
+        build_face(&s_face[f++], s_vert, s_vert[NV_D + i], 0, NV_D, 5);
     }
     for (int i = 0; i < NV_D; i++) {
-        build_face(&s_face[f++], s_vert[i], NV_D, NV_I, 3);
+        build_face(&s_face[f++], s_vert, s_vert[i], NV_D, NV_I, 3);
     }
     /* Boot order: a stable shuffle, so the facets arrive scattered. */
     for (int i = 0; i < NF; i++) {
         uint32_t h = (uint32_t)(i + 1) * 2654435761u;
         h ^= h >> 15;
         s_face[i].order = (float)(h & 1023) / 1023.0f;
+    }
+    /* Bit's "Yes": an octahedron as tall as the crystal's tips; a face under each cube corner. */
+    const float R = 1.9f;
+    for (int i = 0; i < 3; i++) {
+        float a[3] = { 0, 0, 0 };
+        a[i] = R;
+        s_oct_v[2 * i] = v3(a[0], a[1], a[2]);
+        s_oct_v[2 * i + 1] = v3(-a[0], -a[1], -a[2]);
+    }
+    for (int i = 0; i < 8; i++) {
+        build_face(&s_oct_f[i], s_oct_v, v3(i & 1 ? 1 : -1, i & 2 ? 1 : -1, i & 4 ? 1 : -1), 0, NV_OCT, 3);
     }
 }
 
@@ -379,9 +420,18 @@ typedef struct {
     float assemble;         /* boot: faces with order < assemble are drawn; >1 = all */
 } crystal_t;
 
-/* Projected vertices, 1/16 px, and rotated depth. */
-static int32_t s_sx[NV], s_sy[NV];
-static float s_sz[NV];
+/* Projected vertices, 1/16 px, and rotated depth: the mesh being drawn. In
+ * PSRAM on the device: W27's 182 vertices would cost internal RAM. */
+#ifndef EXT_RAM_BSS_ATTR
+#if __has_include("esp_attr.h")
+#include "esp_attr.h"
+#endif
+#endif
+#ifndef EXT_RAM_BSS_ATTR
+#define EXT_RAM_BSS_ATTR
+#endif
+static EXT_RAM_BSS_ATTR int32_t s_sx[MAX_V], s_sy[MAX_V];
+static EXT_RAM_BSS_ATTR float s_sz[MAX_V];
 
 /* Rasterises one convex face into s_fb/s_zbuf with a 2-colour ordered dither. */
 static void raster_face(const face_t *f, uint8_t lo, uint8_t hi, int thr)
@@ -469,7 +519,7 @@ static void raster_face(const face_t *f, uint8_t lo, uint8_t hi, int thr)
     }
 }
 
-static void draw_crystal(const crystal_t *c)
+static void draw_crystal(const crystal_t *c, const mesh_t *mesh, float scale)
 {
     /* Rotation: yaw about y, then pitch about x, then roll about z. */
     float cyw = cosf(c->yaw), syw = sinf(c->yaw);
@@ -484,8 +534,10 @@ static void draw_crystal(const crystal_t *c)
                   m[1][0] * (v).x + m[1][1] * (v).y + m[1][2] * (v).z, \
                   m[2][0] * (v).x + m[2][1] * (v).y + m[2][2] * (v).z)
 
-    for (int i = 0; i < NV; i++) {
-        v3_t r = ROT(s_vert[i]);
+    float k = mesh->radius * scale;
+    for (int i = 0; i < mesh->nv; i++) {
+        v3_t sv = v3(mesh->v[i].x * k, mesh->v[i].y * k, mesh->v[i].z * k);
+        v3_t r = ROT(sv);
         float persp = 1.0f / (1.0f - r.z * 0.07f);   /* a touch of perspective */
         s_sx[i] = (int32_t)((c->cx + r.x * c->size * persp) * 16.0f);
         s_sy[i] = (int32_t)((c->cy - r.y * c->size * persp) * 16.0f);
@@ -496,8 +548,8 @@ static void draw_crystal(const crystal_t *c)
     const v3_t HV = norm3(v3(L.x, L.y, L.z + 1.0f));    /* half vector for the shine */
     static const uint8_t RAMP[SHADES] = { C_NAVY, C_F3, C_F2, C_F1, C_F0, C_HI };
 
-    for (int i = 0; i < NF; i++) {
-        const face_t *f = &s_face[i];
+    for (int i = 0; i < mesh->nf; i++) {
+        const face_t *f = &mesh->f[i];
         if (f->order >= c->assemble) {
             continue;
         }
@@ -620,6 +672,22 @@ static struct {
     float roll;
 } s_m = { .last_t = -1.0f, .rot = 0.6f, .rot_speed = 0.35f, .bob_amp = 2.5f, .scale = 1.0f, .glow = 0.6f };
 
+/* The shape morph: from s_from to s_shape as s_morph runs 0 -> 1. */
+#define MORPH_S 0.45f
+static int s_shape = SHAPE_CRYSTAL, s_from = SHAPE_CRYSTAL;
+static float s_morph = 1.0f;
+
+static void morph_toward(int target, float dt)
+{
+    if (target != s_shape) {
+        /* Mid-morph, the shape on screen is whichever is more than half there. */
+        s_from = s_morph < 0.5f ? s_from : s_shape;
+        s_shape = target;
+        s_morph = s_from == target ? 1.0f : 0.0f;
+    }
+    s_morph = clampf(s_morph + dt / MORPH_S, 0, 1);
+}
+
 void muse_pixel_render(const muse_pose_t *p)
 {
     static bool s_init;
@@ -633,9 +701,11 @@ void muse_pixel_render(const muse_pose_t *p)
     muse_mode_t mode = p->mode < MUSE_MODE_COUNT ? p->mode : MUSE_MODE_IDLE;
     float t = p->t, mt = p->mode_t, level = clampf(p->level, 0, 1);
     float happy = mode == MUSE_MODE_ERROR ? 0.0f : clampf(p->happy, 0, 1);
+    bool pet = p->pet > 0 && mode != MUSE_MODE_ERROR && mode != MUSE_MODE_OFF && mode != MUSE_MODE_BOOT;
     float fade = mode == MUSE_MODE_OFF ? clampf(1.0f - mt / 1.3f, 0, 1) : 1.0f;
 
-    update_palette(&SCHEMES[mode], dt);
+    update_palette(pet ? &PET_SCHEME : &SCHEMES[mode], dt);
+    morph_toward(pet ? SHAPE_NO : mode == MUSE_MODE_SPEAKING ? SHAPE_YES : SHAPE_CRYSTAL, dt);
     memset(s_fb, C_BG, sizeof(s_fb));
     memset(s_zbuf, 0, sizeof(s_zbuf));
 
@@ -690,10 +760,18 @@ void muse_pixel_render(const muse_pose_t *p)
     default:
         break;
     }
+    if (pet) {
+        /* Bit's "No": a brisk spin in place, bright and glowing red. */
+        rot_speed = 1.4f;
+        bob_amp = 0.4f;
+        dy = 0;
+        bright = 0.35f;
+        glow = 0.9f;
+    }
 
     float k_fast = 1.0f - expf(-dt * 6.0f);
     s_m.rot_speed += (rot_speed - s_m.rot_speed) * k_fast;
-    s_m.rot += s_m.rot_speed * dt;
+    s_m.rot += (s_m.rot_speed + 5.0f * sinf(3.1416f * s_morph)) * dt;   /* a whirl through each morph */
     if (s_m.rot > TAU) {
         s_m.rot -= TAU;
     }
@@ -733,11 +811,18 @@ void muse_pixel_render(const muse_pose_t *p)
     float glow_s = s_m.glow + happy * 0.4f;
     draw_floor_glow(32.0f, 59.5f, 15.0f * (1.0f - lift), glow_s * 1.5f * (1.0f - lift));
 
-    /* ---- the crystal ---- */
-    draw_crystal(&c);
+    /* ---- the crystal: mid-morph, the old shape shrinks as the new one grows through it ---- */
+    float k = s_morph * s_morph * (3 - 2 * s_morph);
+    if (k < 0.98f) {
+        draw_crystal(&c, &SHAPES[s_from], 1.0f - 0.65f * k);
+    }
+    if (k > 0.02f) {
+        draw_crystal(&c, &SHAPES[s_shape], 0.35f + 0.65f * k);
+    }
     draw_rim(fade * clampf(assemble, 0, 1));
 
-    if (happy > 0.05f) {
+    /* Sparkles sit on the crystal's tips, so only once it's whole again. */
+    if (happy > 0.05f && s_shape == SHAPE_CRYSTAL && k >= 0.98f) {
         draw_tip_sparkles(&c, t, happy);
     }
 }

@@ -66,6 +66,7 @@ int main(int argc, char **argv)
     shot(dir, "thinking", (muse_pose_t){ .mode = MUSE_MODE_THINKING, .t = 40.2f, .mode_t = 1 });
     shot(dir, "speaking", (muse_pose_t){ .mode = MUSE_MODE_SPEAKING, .t = 50.25f, .mode_t = 1, .level = 0.6f });
     shot(dir, "happy", (muse_pose_t){ .mode = MUSE_MODE_IDLE, .t = 60.1f, .mode_t = 9, .happy = 1 });
+    shot(dir, "pet", (muse_pose_t){ .mode = MUSE_MODE_IDLE, .t = 65.3f, .mode_t = 9, .pet = 1 });
     shot(dir, "off", (muse_pose_t){ .mode = MUSE_MODE_OFF, .t = 90.0f, .mode_t = 0.6f });
     shot(dir, "error", (muse_pose_t){ .mode = MUSE_MODE_ERROR, .t = 80.0f, .mode_t = 2 });
     return 0;

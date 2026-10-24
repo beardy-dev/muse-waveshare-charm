@@ -28,6 +28,7 @@
 #include "muse_text.h"
 
 #define HAPPY_SECS 1.6f
+#define PET_SECS 3.0f   /* charm: then 0.45 s to morph back */
 
 #define AWAKE_BIT BIT0   /* while !s_asleep */
 #define NUDGE_BIT BIT1
@@ -38,6 +39,7 @@ static volatile float s_level;
 static volatile float s_progress;
 static volatile int64_t s_last_poke_us;
 static volatile int64_t s_happy_until_us;
+static volatile int64_t s_pet_until_us;
 static volatile bool s_asleep;
 
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
@@ -229,6 +231,17 @@ void muse_state_wait_awake(uint32_t timeout_ms)
 void muse_state_nudge(void)
 {
     xEventGroupSetBits(s_wake, NUDGE_BIT);
+}
+
+void muse_state_pet(void)
+{
+    s_pet_until_us = esp_timer_get_time() + (int64_t)(PET_SECS * 1e6f);
+    muse_state_poke();
+}
+
+float muse_state_petting(void)
+{
+    return esp_timer_get_time() < s_pet_until_us ? 1.0f : 0.0f;
 }
 
 void muse_state_make_happy(void)

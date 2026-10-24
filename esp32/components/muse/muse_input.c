@@ -693,6 +693,10 @@ static void set_face(const char *name)
         [MUSE_MODE_OFF] = "off",
     };
     muse_state_poke();
+    if (!strcmp(name, "pet")) {   /* charm: as a tap on the face */
+        muse_state_pet();
+        return;
+    }
     bool happy = !strcmp(name, "happy");
     if (happy) {
         name = "idle";   /* where a finished turn hops to */
@@ -707,7 +711,7 @@ static void set_face(const char *name)
             return;
         }
     }
-    printf("@face.error unknown face \"%s\": boot idle listening thinking speaking error off happy\n", name);
+    printf("@face.error unknown face \"%s\": boot idle listening thinking speaking error off happy pet\n", name);
     fflush(stdout);
 }
 

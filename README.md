@@ -31,6 +31,7 @@ Meta's, kept as it was.
 
 **Face and screen**
 - **Custom avatar:** a crystal (a dodecahedron–icosahedron compound) rendered in real 3D, with motion for each state ([`components/muse/avatar/muse_pixel.c`](esp32/components/muse/avatar/muse_pixel.c)).
+- **Bit, from Tron:** the crystal is Bit's neutral shape. While a reply is spoken it morphs into a yellow-orange octahedron (Bit's "Yes"). Tap it and it turns red and morphs into the icosahedron's second stellation (Bit's "No", Wenninger W27) for 3 s. [`tools/muse/stellate.py`](esp32/tools/muse/stellate.py) generates that shape, or any other icosahedron stellation, from its Du Val cell notation ([`charm_shapes.h`](esp32/components/muse/avatar/charm_shapes.h)).
 - **Readable captions:** slowed to 10 characters a second, with the last lines held for 4 s.
 - **24-hour clock** on its own line at the top of the face, set by SNTP (US Central) ([`charm_clock.c`](esp32/components/muse/charm_clock.c)).
 
@@ -72,7 +73,7 @@ serial (`>sdk_token=…`).
 
 ## Bench console
 
-Over the USB serial console: `>say=<text>` speaks text, `>tts.pitch=<50-200>` sets the voice pitch, and `>power` prints battery and power stats. Bench keys `d` / `u` press and release the talk button. Note that opening the port with pyserial resets the board. To watch the log without a reset, read the port raw, the way `cat` does.
+Over the USB serial console: `>say=<text>` speaks text, `>face=pet` plays the red "No", `>tts.pitch=<50-200>` sets the voice pitch, and `>power` prints battery and power stats. Bench keys `d` / `u` press and release the talk button. Note that opening the port with pyserial resets the board. To watch the log without a reset, read the port raw, the way `cat` does.
 
 ## Known limits
 

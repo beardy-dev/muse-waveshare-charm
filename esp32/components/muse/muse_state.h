@@ -95,3 +95,7 @@ void muse_state_nudge(void);
 /* Touch/pet reaction. */
 void muse_state_make_happy(void);
 float muse_state_happiness(void);
+
+/* charm: a tap on the face. The avatar answers like Bit's "No" for a few seconds. */
+void muse_state_pet(void);
+float muse_state_petting(void);   /* 1 while it lasts, else 0 */

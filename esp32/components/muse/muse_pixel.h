@@ -37,7 +37,8 @@ typedef struct {
     float t;         /* seconds since boot */
     float mode_t;    /* seconds in current mode */
     float level;     /* 0..1 live audio level */
-    float happy;     /* 0..1 pet reaction */
+    float happy;     /* 0..1 happy reaction (a finished reply) */
+    float pet;       /* > 0 while petted (a tap on the face) */
 } muse_pose_t;
 
 /* Accent colour of a mode (for the surrounding UI), as 0xRRGGBB. */
