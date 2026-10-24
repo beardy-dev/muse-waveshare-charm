@@ -69,10 +69,15 @@ static inline void muse_chat_reject(muse_chat_rejected_t *rejected, const char *
     memcpy(rejected->ids[rejected->count++], id, len + 1);
 }
 
-/* A voice note is a POST /chat/stream body: NOTE_HEAD, a base64 WAV, NOTE_TAIL. */
+/*
+ * A voice note is a POST /chat/stream body: NOTE_HEAD, a base64 WAV, NOTE_TAIL.
+ * charm: the message is "[charm]" and the file charm_note.wav, so GUPPI can
+ * tell a note from the charm from one sent in Muse's apps (it sees the message
+ * as a plain line beside the auto-transcript, and the file as charm_note-N.wav).
+ */
 #define MUSE_HATCH_NOTE_HEAD \
-    "{\"message\":\"\",\"output_modality\":\"text\",\"items\":[{\"type\":\"file\"," \
-    "\"mime_type\":\"audio/wav\",\"filename\":\"voice_note.wav\",\"data_base64\":\""
+    "{\"message\":\"[charm]\",\"output_modality\":\"text\",\"items\":[{\"type\":\"file\"," \
+    "\"mime_type\":\"audio/wav\",\"filename\":\"charm_note.wav\",\"data_base64\":\""
 #define MUSE_HATCH_NOTE_TAIL "\"}]}"
 #define MUSE_HATCH_WAV_HEADER 44
 

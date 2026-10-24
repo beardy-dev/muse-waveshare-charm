@@ -48,8 +48,8 @@ def riff_header(rate):
 
 # The POST /chat/stream envelope around the base64 WAV, written out rather than
 # read from muse_chat_priv.h: changing what the device sends must change this.
-HEAD = (b'{"message":"","output_modality":"text","items":[{"type":"file",'
-        b'"mime_type":"audio/wav","filename":"voice_note.wav","data_base64":"')
+HEAD = (b'{"message":"[charm]","output_modality":"text","items":[{"type":"file",'
+        b'"mime_type":"audio/wav","filename":"charm_note.wav","data_base64":"')
 TAIL = b'"}]}'
 
 
@@ -198,8 +198,8 @@ class VoiceNoteHelpers(unittest.TestCase):
         self.assertEqual(body, HEAD + base64.b64encode(riff_header(16000) + pcm) + TAIL)
         request = json.loads(body)
         wav = base64.b64decode(request['items'][0].pop('data_base64'), validate=True)
-        self.assertEqual(request, {'message': '', 'output_modality': 'text', 'items': [
-            {'type': 'file', 'mime_type': 'audio/wav', 'filename': 'voice_note.wav'}]})
+        self.assertEqual(request, {'message': '[charm]', 'output_modality': 'text', 'items': [
+            {'type': 'file', 'mime_type': 'audio/wav', 'filename': 'charm_note.wav'}]})
         self.assertEqual(wav, riff_header(16000) + pcm)
         with wave.open(io.BytesIO(wav)) as w:
             self.assertEqual((w.getnchannels(), w.getsampwidth(), w.getframerate()), (1, 2, 16000))
