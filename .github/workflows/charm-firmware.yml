@@ -12,6 +12,7 @@ name: Charm firmware
 on:
   push:
     branches: [charm]
+    paths-ignore: ['**.md']   # docs alone don't make a new firmware release
   workflow_dispatch:
 
 permissions:
