@@ -1,0 +1,85 @@
+# Builds the charm's firmware (Waveshare ESP32-S3-Touch-AMOLED-1.75C) on every
+# push to `charm`, the same build tools/muse/board.sh does for `s3`, and
+# publishes the signed image for OTA (device.ota).
+#
+# Versions: version.txt is 1.0.0 for local builds; CI stamps 1.0.<run number>,
+# so every CI image is newer than a USB-flashed one and passes the OTA version
+# gate without `force`. The image is signed with dev_signing_key.pem (the key
+# the firmware checks updates against, CONFIG_SECURE_SIGNED_ON_UPDATE).
+
+name: Charm firmware
+
+on:
+  push:
+    branches: [charm]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # the release
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build charm firmware
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.0.1
+    defaults:
+      run:
+        shell: bash
+        working-directory: esp32
+    env:
+      B: build-charm
+      VERSION: 1.0.${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Build
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          echo "$VERSION" > version.txt
+          idf.py -B "$B" -DIDF_TARGET=esp32s3 -DSDKCONFIG="$B/sdkconfig" \
+            -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;devices/sdkconfig.muse;devices/sdkconfig.muse-waveshare-s3-175c" \
+            build
+
+      - name: Collect the images
+        run: |
+          mkdir -p ../out
+          cp "$B/muse-gadget.bin" "../out/charm-$VERSION.bin"
+          # A full image set for a USB flash, as `idf.py flash` writes it.
+          (cd "$B" && tar czf "../../out/charm-$VERSION-usb.tar.gz" flash_args \
+            bootloader/bootloader.bin partition_table/partition-table.bin \
+            ota_data_initial.bin muse-gadget.bin)
+          (cd ../out && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+          stat -c '%s bytes' "../out/charm-$VERSION.bin"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: charm-firmware
+          path: out/
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      VERSION: 1.0.${{ github.run_number }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: charm-firmware
+          path: out
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "fw-$VERSION" out/* \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Charm firmware $VERSION" \
+            --notes "Built from ${GITHUB_SHA::7}. OTA: device.ota with the URL of charm-$VERSION.bin. USB: unpack charm-$VERSION-usb.tar.gz and run esptool write-flash @flash_args."
